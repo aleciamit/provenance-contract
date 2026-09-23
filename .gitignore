@@ -1,0 +1,11 @@
+# Local, never committed
+SCRUB.local.md
+*.local.md
+.claude/settings.local.json
+
+# Backups and builds
+backup/
+backup-*/
+dist/
+node_modules/
+.DS_Store

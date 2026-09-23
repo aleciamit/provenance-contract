@@ -1,0 +1,12 @@
+:root { --bg: #F9FAF7; --ink: #3C4142; --ink-2: #363533; --muted: #666460; --accent: #365041; --panel: #F0EFE9; }
+body { margin: 0; background: var(--bg); color: var(--ink-2); font-family: system-ui, sans-serif; }
+.page { max-width: 720px; margin: 0 auto; padding: 48px 16px; }
+.masthead { margin-bottom: 32px; }
+.eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.title { font-size: 32px; line-height: 1.1; color: var(--ink); margin: 0; }
+.cards { display: grid; gap: 16px; }
+.card { background: var(--panel); border-radius: 8px; padding: 24px; }
+.label { font-weight: 600; color: var(--ink); margin: 0 0 8px; }
+.body { margin: 0; line-height: 1.6; }
+.foot { margin-top: 32px; }
+.foot a { color: var(--accent); }
