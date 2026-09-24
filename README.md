@@ -1,9 +1,9 @@
 # The Provenance Contract
 
-Five rules a designer holds an AI coding agent to, so that the decisions stay the designer's.
-They live in files at the root of every project the agent works in, rather than in anyone's
-head, and they survive a change of model, session or collaborator because a new agent reads
-the same files before touching anything.
+Five rules a designer holds an AI coding agent to, so that the decisions stay with the person
+who owns the work. They live in files at the root of every project the agent works in, rather
+than in anyone's head, and they survive a change of model, session or collaborator because a
+new agent reads the same files before touching anything.
 
 This repository is the contract as a template: the three files, the hook that puts the rule
 in front of the agent before every edit, the skill that spells out how to read a spec, the
