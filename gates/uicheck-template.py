@@ -46,7 +46,8 @@ def serve(folder, port):
 
 def load(url):
     """Rendered DOM and console lines. Chrome writes the DOM and then hangs on this platform, so read
-    until </html> or the deadline, then kill it."""
+    until the output ends in </html> and has gone quiet, or the deadline, then kill it. The first
+    </html> is not the end: a page can carry one inside a script, such as a template string."""
     subprocess.run(['rm', '-rf', PROFILE])
     log = open(PROFILE + '.log', 'w')
     p = subprocess.Popen([CHROME, '--headless', '--disable-gpu', '--disable-crashpad', '--disable-component-update',
@@ -60,7 +61,8 @@ def load(url):
             chunk = os.read(p.stdout.fileno(), 65536)
             if not chunk: break
             buf += chunk
-            if b'</html>' in buf: break
+        elif buf.rstrip().endswith(b'</html>'):
+            break   # quiet for 0.5s with the document closed
     p.kill(); p.wait(); log.close()
     console = [l.strip() for l in open(PROFILE + '.log', errors='replace') if 'CONSOLE' in l or 'ERROR' in l]
     subprocess.run(['rm', '-rf', PROFILE, PROFILE + '.log'])
