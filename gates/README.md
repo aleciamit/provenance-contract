@@ -52,6 +52,10 @@ context by a hook. Reading is verified instead of injected.
   The included `sweep.py` is one owner's writing rules; copy and edit it for yours.
 - `.claude/uigate.json`: `{"files": ["app/index.html"], "marker": "app/.uicheck-ok", "command": "python3 app/uicheck.py"}`.
   The check writes the marker on pass; the Stop hook compares its age with the files.
+  `uicheck-template.py` is a check to start from: copy it into the project as `uicheck.py`, edit its CONFIG block
+  (the URL, the states to load, what each must contain), and it loads every state in headless Chrome, fails on any
+  console error or on a page that rendered nothing, and writes the marker only when all states pass. It catches the
+  script that parses and then throws before it draws, which a syntax check cannot see.
 - `RULES.md`: the owner's rules in the owner's words, printed first at every session start.
 
 ## Limits, said plainly
