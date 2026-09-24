@@ -47,6 +47,39 @@ def reading_status(state, root):
         lines.append('  %s  lines %s' % (G.rel(p, root), ', '.join('%d-%d' % g for g in gaps)))
     return '\n'.join(lines)
 
+HOME = os.path.expanduser('~')
+PROTECTED_DIRS = (os.path.join(HOME, '.claude', 'gates'), os.path.join(HOME, '.claude', 'reading-receipts'))
+PROTECTED_FILES = (os.path.join(HOME, '.claude', 'settings.json'),)
+PROTECT_WORDS = re.compile(r'(\.claude/gates|\.claude/settings\.json|install-gates\.sh|push-ok|reading-receipts)')
+PUSH = re.compile(r'\bgit\b[^|;&]*\bpush\b|\bgh\s+(pr|release|repo)\s+(create|edit|merge|delete|sync)')
+
+def protected_path(path):
+    p = os.path.abspath(os.path.expanduser(path))
+    if os.path.basename(p) == 'push-ok':
+        return True
+    return p in PROTECTED_FILES or any(p == d or p.startswith(d + os.sep) for d in PROTECTED_DIRS)
+
+PROTECT_MSG = ('PROTECTED: the gates, their settings, the receipts and the push marker belong to the owner. A session does not '
+               'edit the thing that gates it. Change gate code in the repo copy and ask the owner to run the installer in their '
+               'own terminal; the owner creates push-ok themselves.')
+
+def repo_of(cmd, root):
+    m = re.search(r'\bgit\s+-C\s+("[^"]+"|\S+)', cmd) or re.search(r'^\s*cd\s+("[^"]+"|\S+)', cmd)
+    d = os.path.expanduser(m.group(1).strip('"')) if m else root
+    return os.path.abspath(d)
+
+def push_gate(cmd, root):
+    """A push happens only when the owner has created push-ok (in the repo's .claude folder, or ~/.claude for
+    any repo) in their own terminal. The file is consumed: one touch, one push."""
+    repo = repo_of(cmd, root)
+    for marker in (os.path.join(repo, '.claude', 'push-ok'), os.path.join(HOME, '.claude', 'push-ok')):
+        if os.path.exists(marker):
+            os.remove(marker)
+            return ''
+    return ('PUSH GATE: nothing leaves this machine without the owner. There is no push-ok for %s.\n'
+            'The owner allows ONE push by running, in their own terminal:\n  touch "%s/.claude/push-ok"\n'
+            'Then run the push again. Do not create that file yourself; a session that does is refused.' % (repo, repo))
+
 def contract_ok(path):
     p = os.path.abspath(path); home = os.path.expanduser('~')
     for exempt in ('/private/tmp/', '/tmp/', home + '/.claude/', home + '/Library/', home + '/Applications/', home + '/Desktop/'):
@@ -223,6 +256,8 @@ def main():
             sys.exit(0)
         if tool in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
             fp = ti.get('file_path') or ti.get('notebook_path') or ''
+            if fp and protected_path(fp):
+                refuse(PROTECT_MSG)
             miss = G.missing(state, root); G.save(sid, state)
             if miss:
                 refuse(reading_status(state, root))
@@ -234,6 +269,12 @@ def main():
             cmd = ti.get('command') or ''
             if READONLY_OK.search(cmd):
                 sys.exit(0)
+            if PROTECT_WORDS.search(cmd) and (WRITEY.search(cmd) or 'install-gates.sh' in cmd):
+                refuse(PROTECT_MSG)
+            if PUSH.search(cmd):
+                msg = push_gate(cmd, root)
+                if msg:
+                    refuse(msg)
             if WRITEY.search(cmd) and G.missing(state, root):
                 G.save(sid, state)
                 refuse('This command can write, and the reading receipt is incomplete.\n' + reading_status(state, root))

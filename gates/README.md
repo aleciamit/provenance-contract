@@ -8,6 +8,8 @@ the rule can still skip it under momentum. A hook cannot be skipped.
 |---|---|---|
 | Reading receipt | Read (before and after) | Records every window of every file the session reads, corrected to what the tool returned when it truncated. |
 | Reading gate | Edit, Write, MultiEdit, NotebookEdit, Bash | Refuses any edit, write or writing command until every line of the project's mandatory set has been read this session. Read-only commands pass. |
+| Push gate | Bash | `git push` (and `gh` commands that publish) is refused unless the owner has created `.claude/push-ok` in that repo, or `~/.claude/push-ok` for any repo, in their own terminal. The file is consumed: one touch, one push. A session that creates the file itself is refused. |
+| Self-protection | Edit, Write, Bash | Every session is refused from writing under `~/.claude/gates`, `~/.claude/reading-receipts`, `~/.claude/settings.json` or any `push-ok`, and from running the installer. Gate code changes happen in the repo copy; only the owner installs, in their own terminal. |
 | Contract gate | Edit, Write | Refuses a write into a folder with no `VALIDATION.md` and no `.contract` marker in it or any folder above it. The refusal names the install command. |
 | Rules sweep | Edit, Write (after) | If the project has `gates/sweep.py` or `.claude/sweep.py`, runs it over any Markdown, text or HTML file written and reports the hits into the session. |
 | UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file changed this session and the check's marker is older than the change. |
@@ -23,7 +25,14 @@ sh ~/Repos/provenance-contract/gates/install-gates.sh
 ```
 
 That copies the engine to `~/.claude/gates/`, keeps the contract template beside it, and adds four hook
-entries to `~/.claude/settings.json` (backed up first). Open a new session in any project and try to edit
+entries to `~/.claude/settings.json` (backed up first). Run it yourself, in your own terminal: once the gates are
+installed, no session can run the installer or change the installed engine, which is the point.
+
+To allow one push from a session, in your own terminal:
+
+```bash
+touch ~/Repos/<repo>/.claude/push-ok
+``` Open a new session in any project and try to edit
 a file before reading anything: it must be refused with the list of what is unread.
 
 ## What a project has to read
