@@ -11,6 +11,7 @@ the rule can still skip it under momentum. A hook cannot be skipped.
 | Contract gate | Edit, Write | Refuses a write into a folder with no `VALIDATION.md` and no `.contract` marker in it or any folder above it. The refusal names the install command. |
 | Rules sweep | Edit, Write (after) | If the project has `gates/sweep.py` or `.claude/sweep.py`, runs it over any Markdown, text or HTML file written and reports the hits into the session. |
 | UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file changed this session and the check's marker is older than the change. |
+| Story gate | Stop | Reads the message the session is about to end on and refuses the turn while it hedges (probably, seems to, may be, I assume, I believe, must have been) or explains a discrepancy with a story (a stale snapshot, a cache, an old version, that would explain) with no source beside it: no file and line, no command and output, no question, no admission that it is unchecked. The refusal names each sentence and asks for the check or the question. |
 | Session start | SessionStart | Prints the receipt's state and the project's `RULES.md` and `START-HERE.md`, if they exist. |
 
 ## Install, on any machine
@@ -53,6 +54,8 @@ context by a hook. Reading is verified instead of injected.
 - `RULES.md`: the owner's rules in the owner's words, printed first at every session start.
 
 ## Limits, said plainly
+
+The story gate is a pattern list over sentences, so a determined session can phrase around it; what it removes is the free version of guessing, where a hedge or an invented cause ends the turn unchallenged. After one refusal the harness lets the next stop through (`stop_hook_active`), so the demand is made once per turn, plainly. Code blocks, inline code and quoted lines are not scanned.
 
 The Bash write check is a pattern list (redirects, tee, sed -i, cp, mv, rm, git commit and push, Python
 file writes and so on), not a parser. The gate proves the words passed through the session; it cannot prove

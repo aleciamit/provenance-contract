@@ -10,7 +10,8 @@ PreToolUse    Read: notes the window being read. Edit/Write/MultiEdit/NotebookEd
 PostToolUse   Read: corrects the window to what was actually returned when the tool truncated. Edit/Write:
               runs the project's sweep (gates/sweep.py or .claude/sweep.py) over the file and reports.
 Stop          refuses to end the turn while a file listed in .claude/uigate.json changed this session and
-              its check has not passed since.
+              its check has not passed since; and refuses to end it on a message that hedges or explains a
+              discrepancy with a story and cites nothing (the story gate).
 
 The mandatory set is the project's .claude/mandatory.txt or gates/mandatory.txt; without one it is every
 rule file the project has: RULES.md, START-HERE.md, CLAUDE.md, VALIDATION.md, DESIGN.md, the two newest
@@ -67,6 +68,61 @@ def sweep_report(root, path):
             r = subprocess.run([sys.executable, s, path], capture_output=True, text=True)
             return r.stdout.strip()
     return ''
+
+HEDGE = re.compile(r"\b(may be|might be|might have|may have|could be|could have|likely|unlikely|probably|presumably|possibly|perhaps|"
+                   r"seems?( to| like)?|looks? like|appears? to|apparently|my (read|guess|sense|hunch) is|i'?d guess|i guess|if i had to (say|guess)|"
+                   r"i suspect|i assume|i imagine|i believe|i think (it|this|that|the)|must (have been|be)|should (have been|be)|"
+                   r"in theory|theoretically|typically|usually|tends? to|as far as i can tell|i'?m not (sure|certain)|"
+                   r"stale (snapshot|copy|cache|version|read|state|tab|page|build|index)|(a|the) cach(e|ed)|race condition|timing issue|"
+                   r"an? (old|older|outdated|earlier) (version|copy|snapshot|build)|left ?over from|artifact of|which (would|could) explain|"
+                   r"that (would|could) explain|the only explanation|explains why)\b", re.I)
+CITE = re.compile(r"[\w./-]+\.(py|md|html|css|js|json|txt|sh|rtf)(:\d+)?|\bline \d+|\bat \d+:\d+|\bI (have not|haven'?t) checked\b|\blet me check\b|\bI don'?t know\b", re.I)
+
+def last_assistant_text(transcript_path):
+    if not transcript_path or not os.path.exists(transcript_path):
+        return ''
+    text = ''
+    for ln in open(transcript_path, encoding='utf-8', errors='replace'):
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        if d.get('type') != 'assistant':
+            continue
+        c = (d.get('message') or {}).get('content')
+        parts = [c] if isinstance(c, str) else [b.get('text', '') for b in (c or []) if isinstance(b, dict) and b.get('type') == 'text']
+        t = '\n'.join(x for x in parts if x)
+        if t.strip():
+            text = t
+    return text
+
+def story_scan(text):
+    """Sentences that hedge or explain a discrepancy with a story, and carry no source, no question and no
+    admission that the thing is unchecked. Code blocks, inline code and quoted lines are ignored."""
+    t = re.sub(r'```.*?```', ' ', text, flags=re.S)
+    t = re.sub(r'`[^`]*`', ' ', t)
+    t = '\n'.join(l for l in t.splitlines() if not l.lstrip().startswith('>'))
+    hits = []
+    for sent in re.split(r'(?<=[.!?])\s+|\n+', t):
+        s = sent.strip()
+        if len(s) < 12 or s.endswith('?'):
+            continue
+        m = HEDGE.search(s)
+        if m and not CITE.search(s):
+            hits.append((m.group(0), s[:160]))
+    return hits
+
+def story_gate(data):
+    hits = story_scan(last_assistant_text(data.get('transcript_path')))
+    if not hits:
+        return ''
+    lines = ['STORY GATE: the message you were about to end on states things it has not checked. A hedge or an',
+             'explanation with no source beside it does not get to end the turn. For each line below, do one of two',
+             'things now: open the file or run the probe and state what you found, with the file and line or the',
+             'command and its output; or turn the sentence into a question for the owner. Then end the turn.']
+    for word, sent in hits[:12]:
+        lines.append('  [%s]  %s' % (word, sent))
+    return '\n'.join(lines)
 
 def ui_gate(root, state):
     cfg = os.path.join(root, '.claude', 'uigate.json')
@@ -165,9 +221,9 @@ def main():
     if ev == 'Stop':
         if data.get('stop_hook_active'):
             sys.exit(0)
-        msg = ui_gate(root, state)
-        if msg:
-            refuse(msg)
+        msgs = [m for m in (ui_gate(root, state), story_gate(data)) if m]
+        if msgs:
+            refuse('\n\n'.join(msgs))
         sys.exit(0)
     sys.exit(0)
 
