@@ -11,7 +11,9 @@ PostToolUse   Read: corrects the window to what was actually returned when the t
               runs the project's sweep (gates/sweep.py or .claude/sweep.py) over the file and reports.
 Stop          refuses to end the turn while a file listed in .claude/uigate.json changed this session and
               its check has not passed since; and refuses to end it on a message that hedges or explains a
-              discrepancy with a story and cites nothing (the story gate).
+              discrepancy with a story, or states a flat diagnosis, and cites nothing (the story gate); and
+              refuses a message that claims to have checked something in a turn where no tool ran (the
+              verification gate).
 
 The mandatory set is the project's .claude/mandatory.txt or gates/mandatory.txt; without one it is every
 rule file the project has: RULES.md, START-HERE.md, CLAUDE.md, VALIDATION.md, DESIGN.md, the two newest
@@ -76,7 +78,18 @@ HEDGE = re.compile(r"\b(may be|might be|might have|may have|could be|could have|
                    r"stale (snapshot|copy|cache|version|read|state|tab|page|build|index)|(a|the) cach(e|ed)|race condition|timing issue|"
                    r"an? (old|older|outdated|earlier) (version|copy|snapshot|build)|left ?over from|artifact of|which (would|could) explain|"
                    r"that (would|could) explain|the only explanation|explains why)\b", re.I)
-CITE = re.compile(r"[\w./-]+\.(py|md|html|css|js|json|txt|sh|rtf)(:\d+)?|\bline \d+|\bat \d+:\d+|\bI (have not|haven'?t) checked\b|\blet me check\b|\bI don'?t know\b", re.I)
+DIAG = re.compile(r"\b(that'?s why|which is why|the reason (is|was|being)|the (root )?cause( is| was)?|the culprit|the (problem|issue|bug) (is|was) (that|because)|"
+                  r"(is|are|was|were) (what'?s )?(causing|breaking)|caused by|"
+                  r"(isn'?t|is not|wasn'?t|was not|aren'?t|are not|weren'?t|were not) (on|off|set|enabled|disabled|active|turned on|turned off|wired|hooked up|connected|applied|loaded|present|there|running)|"
+                  r"(is|was|are|were) (off|missing|broken|disabled|unset|stale|out of date|misconfigured|not (set|on|enabled|applied|wired))|"
+                  r"never (fired|ran|loaded|applied)|"
+                  r"(isn'?t|is not|not|wasn'?t|was not) (your|the|my|our|a|an) (problem|issue|concern|cause|factor)|(has|had) nothing to do with)\b", re.I)
+CITE = re.compile(r"[\w./-]+\.(py|md|html|css|js|json|txt|sh|rtf|tsx?|jsx?)(:\d+)?|\bline \d+|\bat \d+:\d+|\bnode(-id)? [\d:]+|\bframe \d+|"
+                  r"\b(output|printed|returned|exit code|stdout)\b|\b(curl|grep|python3?|node|npm|ls|cat|sed|get_metadata|get_design_context|get_screenshot)\b|"
+                  r"\bI (have not|haven'?t) checked\b|\blet me check\b|\bI don'?t know\b", re.I)
+VERIFY = re.compile(r"\b(i (checked|verified|confirmed|tested|ran|re-?ran|looked|opened|probed|measured|inspected|read)|"
+                    r"(tests?|checks?|the check|the build|the sweep) (pass|passes|passed|is clean|are clean)|it works( now)?|works now|"
+                    r"(is|are) (confirmed|verified)|all (good|clear|green)|(confirmed|verified) (that|it|the))\b", re.I)
 
 def last_assistant_text(transcript_path):
     if not transcript_path or not os.path.exists(transcript_path):
@@ -107,10 +120,47 @@ def story_scan(text):
         s = sent.strip()
         if len(s) < 12 or s.endswith('?'):
             continue
-        m = HEDGE.search(s)
+        m = HEDGE.search(s) or DIAG.search(s)
         if m and not CITE.search(s):
             hits.append((m.group(0), s[:160]))
     return hits
+
+def turn_tool_calls(transcript_path):
+    """How many tool calls the assistant made since the owner's last real message (tool results do not count
+    as owner messages)."""
+    if not transcript_path or not os.path.exists(transcript_path):
+        return None
+    n = 0
+    for ln in open(transcript_path, encoding='utf-8', errors='replace'):
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        c = (d.get('message') or {}).get('content')
+        blocks = c if isinstance(c, list) else []
+        if d.get('type') == 'user':
+            if isinstance(c, str) or any(isinstance(b, dict) and b.get('type') == 'text' for b in blocks):
+                n = 0                      # a real owner message starts a new turn
+        elif d.get('type') == 'assistant':
+            n += sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'tool_use')
+    return n
+
+def verify_gate(data):
+    """A message that says it checked something, in a turn where nothing was checked."""
+    text = last_assistant_text(data.get('transcript_path'))
+    t = re.sub(r'```.*?```', ' ', text, flags=re.S); t = re.sub(r'`[^`]*`', ' ', t)
+    claims = [s.strip()[:160] for s in re.split(r'(?<=[.!?])\s+|\n+', t) if VERIFY.search(s) and not s.strip().endswith('?')]
+    if not claims:
+        return ''
+    calls = turn_tool_calls(data.get('transcript_path'))
+    if calls is None or calls > 0:
+        return ''
+    lines = ['VERIFICATION GATE: this message says something was checked, and no tool ran in this turn: no file was',
+             'opened, no command was run, no probe was made. Either do the check now and state what it printed, or',
+             'say plainly that it was not checked.']
+    for c in claims[:8]:
+        lines.append('  ' + c)
+    return '\n'.join(lines)
 
 def story_gate(data):
     hits = story_scan(last_assistant_text(data.get('transcript_path')))
@@ -221,7 +271,7 @@ def main():
     if ev == 'Stop':
         if data.get('stop_hook_active'):
             sys.exit(0)
-        msgs = [m for m in (ui_gate(root, state), story_gate(data)) if m]
+        msgs = [m for m in (ui_gate(root, state), story_gate(data), verify_gate(data)) if m]
         if msgs:
             refuse('\n\n'.join(msgs))
         sys.exit(0)
