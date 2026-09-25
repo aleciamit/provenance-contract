@@ -9,8 +9,8 @@ PreToolUse    Read: notes the window being read. Edit/Write/MultiEdit/NotebookEd
               and no .contract marker in the folder or any folder above it).
 PostToolUse   Read: corrects the window to what was actually returned when the tool truncated. Edit/Write:
               runs the project's sweep (gates/sweep.py or .claude/sweep.py) over the file and reports.
-Stop          refuses to end the turn while a file listed in .claude/uigate.json changed this session and
-              its check has not passed since; and refuses to end it on a message that hedges or explains a
+Stop          refuses to end the turn while a file listed in .claude/uigate.json was edited BY THIS SESSION and
+              its check has not passed since (another session's edits never hold this one); and refuses to end it on a message that hedges or explains a
               discrepancy with a story, or states a flat diagnosis, and cites nothing (the story gate); and
               refuses a message that claims to have checked something in a turn where no tool ran (the
               verification gate).
@@ -19,7 +19,7 @@ The mandatory set is the project's .claude/mandatory.txt or gates/mandatory.txt;
 rule file the project has: RULES.md, START-HERE.md, CLAUDE.md, VALIDATION.md, DESIGN.md, the two newest
 HANDOFF-*.md. Nothing here depends on the model's cooperation. That is the point.
 """
-import sys, os, re, json, subprocess
+import sys, os, re, json, subprocess, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gatelib as G
 
@@ -207,21 +207,47 @@ def story_gate(data):
         lines.append('  [%s]  %s' % (word, sent))
     return '\n'.join(lines)
 
-def ui_gate(root, state):
+def ui_config(root):
     cfg = os.path.join(root, '.claude', 'uigate.json')
     if not os.path.exists(cfg):
-        return ''
+        return None
     try:
-        c = json.load(open(cfg))
+        return json.load(open(cfg))
     except Exception:
+        return None
+
+def note_ui_touch(state, root, fp):
+    """Record that THIS session wrote a UI-gated file. fp is absolute or project-relative."""
+    c = ui_config(root)
+    if not c or not fp:
+        return
+    rel = G.rel(fp, root) if os.path.isabs(fp) else fp
+    if rel in c.get('files', []):
+        state.setdefault('ui_touched', {})[rel] = time.time()
+
+def note_ui_touch_bash(state, root, cmd):
+    """A Bash command that can write and names a UI-gated file counts as touching it. The pattern list cannot
+    know whether the write happened, so it errs toward running the check."""
+    c = ui_config(root)
+    if not c:
+        return
+    for rel in c.get('files', []):
+        if rel in cmd or os.path.basename(rel) in cmd:
+            state.setdefault('ui_touched', {})[rel] = time.time()
+
+def ui_gate(root, state):
+    """Hold the turn only for files this session itself edited (Edit, Write, MultiEdit, NotebookEdit, or a writing
+    Bash command that named the file) when the check's marker is older than that edit. A file changed by another
+    session in the same folder is that session's to check, never this one's."""
+    c = ui_config(root)
+    if not c:
         return ''
     mark = os.path.join(root, c.get('marker', '.uicheck-ok'))
     mtime = os.path.getmtime(mark) if os.path.exists(mark) else 0
-    started = state.get('started', 0)
-    dirty = [f for f in c.get('files', []) if os.path.exists(os.path.join(root, f))
-             and os.path.getmtime(os.path.join(root, f)) > started and os.path.getmtime(os.path.join(root, f)) > mtime]
+    dirty = [rel for rel, when in state.get('ui_touched', {}).items()
+             if os.path.exists(os.path.join(root, rel)) and when > mtime]
     if dirty:
-        return ('UI GATE: %s changed this session and the check has not passed since. Run\n  %s\nand fix what it reports before handing back.'
+        return ('UI GATE: %s changed in this session and the check has not passed since. Run\n  %s\nand fix what it reports before handing back.'
                 % (', '.join(dirty), c.get('command', 'the UI check')))
     return ''
 
@@ -278,6 +304,8 @@ def main():
             if WRITEY.search(cmd) and G.missing(state, root):
                 G.save(sid, state)
                 refuse('This command can write, and the reading receipt is incomplete.\n' + reading_status(state, root))
+            if WRITEY.search(cmd):
+                note_ui_touch_bash(state, root, cmd); G.save(sid, state)
             sys.exit(0)
         sys.exit(0)
 
@@ -300,8 +328,9 @@ def main():
                 state['announced'] = True; G.save(sid, state)
                 out({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': reading_status(state, root)}})
             sys.exit(0)
-        if tool in ('Edit', 'Write', 'MultiEdit'):
-            fp = ti.get('file_path') or ''
+        if tool in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
+            fp = ti.get('file_path') or ti.get('notebook_path') or ''
+            note_ui_touch(state, root, fp); G.save(sid, state)
             if fp.endswith(SWEEP_EXT) and not any(s in fp for s in SWEEP_SKIP) and os.path.exists(fp):
                 rep = sweep_report(root, fp)
                 if rep and not rep.endswith('0 hits'):

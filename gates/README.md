@@ -12,7 +12,7 @@ the rule can still skip it under momentum. A hook cannot be skipped.
 | Self-protection | Edit, Write, Bash | Every session is refused from writing under `~/.claude/gates`, `~/.claude/reading-receipts`, `~/.claude/settings.json` or any `push-ok`, and from running the installer. Gate code changes happen in the repo copy; only the owner installs, in their own terminal. |
 | Contract gate | Edit, Write | Refuses a write into a folder with no `VALIDATION.md` and no `.contract` marker in it or any folder above it. The refusal names the install command. |
 | Rules sweep | Edit, Write (after) | If the project has `gates/sweep.py` or `.claude/sweep.py`, runs it over any Markdown, text or HTML file written and reports the hits into the session. |
-| UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file changed this session and the check's marker is older than the change. |
+| UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file was edited by this session (through Edit, Write, MultiEdit, NotebookEdit, or a writing Bash command that named the file) and the check's marker is older than that edit. A file changed by another session in the same folder is that session's to check; it never holds this one. |
 | Verification gate | Stop | Refuses a message that says it checked, verified, tested or confirmed something in a turn where no tool ran at all: no file opened, no command run, no probe made. The transcript records every tool call, so the count is not the model's word. |
 | Story gate | Stop | Reads the message the session is about to end on and refuses the turn while it hedges (probably, seems to, may be, I assume, I believe, must have been) or explains a discrepancy with a story (a stale snapshot, a cache, an old version, that would explain), or states a flat diagnosis (X isn't on, that's why; the cause is; the design isn't your problem) with no source beside it: no file and line, no command and output, no question, no admission that it is unchecked. The refusal names each sentence and asks for the check or the question. |
 | Session start | SessionStart | Prints the receipt's state and the project's `RULES.md` and `START-HERE.md`, if they exist. |
@@ -60,7 +60,8 @@ context by a hook. Reading is verified instead of injected.
 - `.claude/sweep.py`: a script that takes one file path and prints its findings, ending with `N hits`.
   The included `sweep.py` is one owner's writing rules; copy and edit it for yours.
 - `.claude/uigate.json`: `{"files": ["app/index.html"], "marker": "app/.uicheck-ok", "command": "python3 app/uicheck.py"}`.
-  The check writes the marker on pass; the Stop hook compares its age with the files.
+  The check writes the marker on pass; the Stop hook compares its age with the edits this session made to the listed
+  files (kept in the session's receipt as `ui_touched`), so two sessions working in one folder each hold only themselves.
   `uicheck-template.py` is a check to start from: copy it into the project as `uicheck.py`, edit its CONFIG block
   (the URL, the states to load, what each must contain), and it loads every state in headless Chrome, fails on any
   console error or on a page that rendered nothing, and writes the marker only when all states pass. It catches the
