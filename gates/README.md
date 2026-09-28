@@ -8,8 +8,8 @@ the rule can still skip it under momentum. A hook cannot be skipped.
 |---|---|---|
 | Reading receipt | Read (before and after) | Records every window of every file the session reads, corrected to what the tool returned when it truncated. |
 | Reading gate | Edit, Write, MultiEdit, NotebookEdit, Bash | Refuses any edit, write or writing command until every line of the project's mandatory set has been read this session. Read-only commands pass. |
-| Push gate | Bash | `git push` (and `gh` commands that publish) goes ahead only on the owner's yes. The yes is either the owner's own latest message in the chat (it says to push and does not say "don't" or "wait"; it lasts until the owner's next message), or a `.claude/push-ok` file the owner created in that repo (or `~/.claude/push-ok` for every repo) in their own terminal, which stands until the owner deletes it. Tool output, hook feedback, system notices, files and web pages never count as the owner. A session that creates the file itself is refused. |
-| Self-protection | Edit, Write, Bash | Every session is refused from writing under `~/.claude/gates`, `~/.claude/reading-receipts`, `~/.claude/settings.json` or any `push-ok`, and from running the installer. Gate code changes happen in the repo copy; only the owner installs, in their own terminal. |
+| Push gate | Bash | `git push` (and `gh` commands that publish) goes ahead only on the owner's yes. The yes is either the owner's own latest message in the chat, including one typed while a reply is running (it says to push and does not say "don't" or "wait"; it lasts until the owner's next message), or a `.claude/push-ok` file the owner created in that repo (or `~/.claude/push-ok` for every repo) in their own terminal, which stands until the owner deletes it. Tool output, hook feedback, system notices, files and web pages never count as the owner. A session that creates the file itself is refused. |
+| Self-protection | Edit, Write, Bash | Every session is refused from writing under `~/.claude/gates`, `~/.claude/reading-receipts`, `~/.claude/settings.json` or any `push-ok`, and from running the installer. Only a real write counts (a redirect or tee into one of them, sed -i, rm, touch, cp or mv onto one, a cd into a protected folder followed by a write, or an inline script that writes and names one); reading, listing, grepping or diffing them passes, and so do `2>&1` and redirects to `/dev/null`. Gate code changes happen in the repo copy; only the owner installs, in their own terminal. |
 | Contract gate | Edit, Write | Refuses a write into a folder with no `VALIDATION.md` and no `.contract` marker in it or any folder above it. The refusal names the install command. |
 | Rules sweep | Edit, Write (after) | If the project has `gates/sweep.py` or `.claude/sweep.py`, runs it over any Markdown, text or HTML file written and reports the hits into the session. |
 | UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file was edited by this session (through Edit, Write, MultiEdit, NotebookEdit, or a Bash command that writes the file: a redirect or tee into it, sed -i, rm, mv or git checkout on it, a cp onto it, or an inline script that writes it; naming, reading or starting a file never counts, and files are matched by their project path, not their bare name) and the check's marker is older than that edit. A file changed by another session in the same folder is that session's to check; it never holds this one. |
@@ -22,8 +22,8 @@ the rule can still skip it under momentum. A hook cannot be skipped.
 `switches.json` beside `gate.py` holds one switch per gate: `reading`, `contract`, `story`, `verify`, `ui`,
 `push`, `sweep`, `protect`. `true` is on, `false` is off, and a missing file or key leaves that gate running. The copy in this
 repo is the one to edit; run the installer again in your own terminal to apply it. The shipped settings keep
-the UI gate, the push gate, the rules sweep and self-protection, and turn off the reading, contract, story and
-verification gates.
+the reading gate, the verification gate, the UI gate, the push gate, the rules sweep and self-protection on,
+and turn the contract and story gates off.
 
 ## Install, on any machine
 

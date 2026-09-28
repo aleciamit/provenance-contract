@@ -1,8 +1,8 @@
 {
-  "reading": false,
+  "reading": true,
   "contract": false,
   "story": false,
-  "verify": false,
+  "verify": true,
   "ui": true,
   "push": true,
   "sweep": true,

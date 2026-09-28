@@ -101,6 +101,12 @@ def last_owner_text(transcript_path):
             d = json.loads(ln)
         except Exception:
             continue
+        a = d.get('attachment') or {}
+        if d.get('type') == 'attachment' and a.get('type') == 'queued_command' \
+                and (a.get('origin') or {}).get('kind') == 'human' and isinstance(a.get('prompt'), str):
+            if a['prompt'].strip():
+                last = a['prompt']         # a message the owner typed while a reply was running
+            continue
         if d.get('type') != 'user' or d.get('isMeta'):
             continue
         c = (d.get('message') or {}).get('content')
@@ -281,34 +287,62 @@ def note_ui_touch(state, root, fp):
 SEGMENT = re.compile(r'\|\||&&|;|\n|(?<!\|)\|(?!\|)')
 REDIRECT_TO = re.compile(r'(?<![<&\d])>{1,2}\s*("[^"]+"|\'[^\']+\'|[^\s;&|<>]+)')
 TEE_TO = re.compile(r'\btee\b((?:\s+-\w+)*)\s+("[^"]+"|\'[^\']+\'|[^\s;&|<>]+)')
-FILE_CMD = re.compile(r'^\s*(?:sudo\s+)?(sed\s+-i|rm|touch|truncate|mv|cp|install|ln|git\s+(?:\S+\s+)*(?:checkout|restore|reset|rm|mv))\b')
+FILE_CMD = re.compile(r'^\s*(?:sudo\s+)?(sed\s+-i|rm|rmdir|touch|truncate|mv|cp|install|ln|rsync|mkdir|chmod|chown|git\s+(?:\S+\s+)*(?:checkout|restore|reset|rm|mv))\b')
 SCRIPT_WRITE = re.compile(r'open\([^)]*[\'"][wax]|write_?[Tt]ext\(|writeFile(Sync)?\(|\.write\(|os\.(replace|rename|remove)|shutil\.')
 
-def bash_ui_writes(cmd, files):
-    """The UI-gated files a Bash command WRITES, as far as a pattern can tell: the target of a redirect or tee, a
-    file named by sed -i, rm, touch, mv, git checkout and the like, the destination of cp, or a file named inside
-    an inline script that writes. Naming a file is not writing it: starting a server that logs elsewhere, reading,
-    or listing never counts. Files are matched by their project path (search/index.html), never by bare name,
-    so another folder's index.html is not this one."""
-    def names(tok):
-        tok = tok.strip('"\'')
-        return [rel for rel in files if tok == rel or tok.endswith('/' + rel)]
-    hit = set()
-    if SCRIPT_WRITE.search(cmd):
-        hit.update(rel for rel in files if rel in cmd)
+def write_tokens(cmd):
+    """The paths a Bash command writes to, as far as a pattern can tell: the target of a redirect or tee, every
+    file sed -i, rm, touch, mv, chmod, git checkout and the like are given, and the destination of cp, install,
+    ln or rsync. 2>&1, &> and redirects to /dev/null name no file. Naming, reading or running a file is not
+    writing it."""
+    toks = []
     for seg in SEGMENT.split(cmd):
-        for m in REDIRECT_TO.finditer(seg):
-            hit.update(names(m.group(1)))
-        for m in TEE_TO.finditer(seg):
-            hit.update(names(m.group(2)))
+        toks += [m.group(1) for m in REDIRECT_TO.finditer(seg)]
+        toks += [m.group(2) for m in TEE_TO.finditer(seg)]
         f = FILE_CMD.match(seg)
         if f:
             args = seg.split()
-            if f.group(1) in ('cp', 'install', 'ln'):
-                args = args[-1:]
-            for a in args:
-                hit.update(names(a))
+            toks += args[-1:] if f.group(1) in ('cp', 'install', 'ln', 'rsync') else args
+    return [t.strip('"\'') for t in toks]
+
+def bash_ui_writes(cmd, files):
+    """The UI-gated files a Bash command WRITES (see write_tokens), plus a file named inside an inline script
+    that writes. Files are matched by their project path (search/index.html), never by bare name, so another
+    folder's index.html is not this one."""
+    hit = set()
+    if SCRIPT_WRITE.search(cmd):
+        hit.update(rel for rel in files if rel in cmd)
+    for t in write_tokens(cmd):
+        hit.update(rel for rel in files if t == rel or t.endswith('/' + rel))
     return hit
+
+INSTALLER_RUN = re.compile(r'^\s*(?:sudo\s+)?(?:(?:sh|bash|zsh|source|\.)\s+)?\S*install-gates\.sh\b')
+CD_TO = re.compile(r'^\s*cd\s+("[^"]+"|\S+)')
+GIT_IN_PROTECTED = re.compile(r'\bgit\s+-C\s+"?\S*\.claude/(gates|reading-receipts)')
+
+def protect_bash(cmd):
+    """Self-protection for Bash: refuse a command that RUNS the installer or WRITES a protected path (the installed
+    gates, the receipts, settings.json, any push-ok), including through a cd into a protected folder, git -C on
+    one, or an inline script that writes and names one. Reading, listing, grepping or diffing them passes."""
+    cwd = None
+    for seg in SEGMENT.split(cmd):
+        if INSTALLER_RUN.match(seg):
+            return True
+        m = CD_TO.match(seg)
+        if m:
+            cwd = os.path.expanduser(m.group(1).strip('"'))
+            continue
+        for t in write_tokens(seg):
+            p = os.path.expanduser(t)
+            if cwd and not os.path.isabs(p):
+                p = os.path.join(cwd, p)
+            if protected_path(p):
+                return True
+    if SCRIPT_WRITE.search(cmd) and PROTECT_WORDS.search(cmd):
+        return True
+    if GIT_IN_PROTECTED.search(cmd) and WRITEY.search(cmd):
+        return True
+    return False
 
 def note_ui_touch_bash(state, root, cmd):
     """A Bash command that writes a UI-gated file counts as touching it (see bash_ui_writes)."""
@@ -380,7 +414,7 @@ def main():
             cmd = ti.get('command') or ''
             if READONLY_OK.search(cmd):
                 sys.exit(0)
-            if ON['protect'] and PROTECT_WORDS.search(cmd) and (WRITEY.search(cmd) or 'install-gates.sh' in cmd):
+            if ON['protect'] and protect_bash(cmd):
                 refuse(PROTECT_MSG)
             if ON['push'] and PUSH.search(cmd):
                 msg = push_gate(cmd, root, data)
