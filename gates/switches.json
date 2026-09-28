@@ -1,0 +1,10 @@
+{
+  "reading": false,
+  "contract": false,
+  "story": false,
+  "verify": false,
+  "ui": true,
+  "push": true,
+  "sweep": true,
+  "protect": true
+}

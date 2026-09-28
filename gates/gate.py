@@ -18,6 +18,8 @@ Stop          refuses to end the turn while a file listed in .claude/uigate.json
 The mandatory set is the project's .claude/mandatory.txt or gates/mandatory.txt; without one it is every
 rule file the project has: RULES.md, START-HERE.md, CLAUDE.md, VALIDATION.md, DESIGN.md, the two newest
 HANDOFF-*.md. Nothing here depends on the model's cooperation. That is the point.
+
+Every gate can be switched off in switches.json beside this file (see GATES below for the names).
 """
 import sys, os, re, json, subprocess, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,6 +28,20 @@ import gatelib as G
 WRITEY = re.compile(r'(?<![<|])>(?!>)\s*\S|>>|\btee\b|\bsed\s+-i|\bcp\s|\bmv\s|\brm\s|\brmdir\b|\bmkdir\b|\btouch\b|\bgit\s+(commit|push|add|rm|mv|checkout|reset|rebase|merge|init)|\bopen\(|\.write\(|os\.rename|os\.remove|os\.replace|shutil\.|\bchmod\b|\bln\s|\bcat\s*>|python3?\s+-\s*<<|\bnpm\s+(install|run|init)|\bpip3?\s+install|\bnpx\b')
 READONLY_OK = re.compile(r'^\s*(cd\s+\S+\s*(&&|;)\s*)?python3?\s+(\S*/)?(read-in|status|gate|sweep|uicheck)\.py(\s|$)')
 SWEEP_EXT = ('.md', '.txt', '.html')
+
+# Each gate can be turned off in switches.json, kept beside this file. A missing file or a missing key means
+# the gate is on, so an older install behaves as before. Only the owner changes the installed copy.
+GATES = ('reading', 'contract', 'story', 'verify', 'ui', 'push', 'sweep', 'protect')
+
+def switches():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'switches.json')
+    try:
+        s = json.load(open(p))
+    except Exception:
+        s = {}
+    return {g: bool(s.get(g, True)) for g in GATES}
+
+ON = switches()
 SWEEP_SKIP = ('/_archive/', '/node_modules/', '/backup', '/vendor/', '/dist/', '/.claude/', 'FACTS.md', 'HANDOFF-', 'WHAT-CHANGED-', 'NEXT.md', '/audit-', '/reports/', '/notes/', 'MOVES-', 'her-words-from-sessions')
 
 def out(obj):
@@ -68,17 +84,54 @@ def repo_of(cmd, root):
     d = os.path.expanduser(m.group(1).strip('"')) if m else root
     return os.path.abspath(d)
 
-def push_gate(cmd, root):
-    """A push happens only when the owner has created push-ok (in the repo's .claude folder, or ~/.claude for
-    any repo) in their own terminal. The file is consumed: one touch, one push."""
+NOT_OWNER = ('<system-reminder', 'Stop hook feedback', '[SYSTEM NOTIFICATION', '<task-notification', '<command-',
+             'Caveat:', 'PreToolUse:', 'PostToolUse:', '[Request interrupted')
+PUSH_WORD = re.compile(r'\b(push(ed|es|ing)?|publish(ed|ing)?)\b', re.I)
+PUSH_YES = re.compile(r"\b(you can|you may|go ahead|allow(ed|ing)?|ok(ay)?|yes|yep|sure|please|do it|push it|go for it|permission|approved?)\b", re.I)
+PUSH_NO = re.compile(r"\b(don'?t|do not|never|not|no|stop|wait|hold off|without)\b[^.!?\n]{0,25}\b(push|publish)", re.I)
+
+def last_owner_text(transcript_path):
+    """The text of the owner's most recent real message: typed by the owner, never a tool result, a hook's
+    feedback, a system notice or a reminder."""
+    if not transcript_path or not os.path.exists(transcript_path):
+        return ''
+    last = ''
+    for ln in open(transcript_path, encoding='utf-8', errors='replace'):
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        if d.get('type') != 'user' or d.get('isMeta'):
+            continue
+        c = (d.get('message') or {}).get('content')
+        texts = [c] if isinstance(c, str) else [b.get('text', '') for b in (c or [])
+                                                  if isinstance(b, dict) and b.get('type') == 'text']
+        texts = [t for t in texts if t.strip() and not t.lstrip().startswith(NOT_OWNER)]
+        if texts:
+            last = '\n'.join(texts)
+    return last
+
+def owner_said_push(transcript_path):
+    """The owner's latest message says yes to a push: a push word, a yes word, and no "don't push" or "wait"."""
+    t = last_owner_text(transcript_path)
+    return bool(t and PUSH_WORD.search(t) and PUSH_YES.search(t) and not PUSH_NO.search(t))
+
+def push_gate(cmd, root, data=None):
+    """A push happens only on the owner's yes. The yes is either the owner's own latest message in this chat
+    (a push word and a yes word, and no "don't"; it lasts until the owner's next message), or a push-ok file the
+    owner created in their own terminal (in the repo's .claude folder, or ~/.claude for every repo), which stands
+    until the owner deletes it. Tool output, web pages and files never count as the owner. A session cannot
+    create the file (self-protection refuses it)."""
     repo = repo_of(cmd, root)
     for marker in (os.path.join(repo, '.claude', 'push-ok'), os.path.join(HOME, '.claude', 'push-ok')):
         if os.path.exists(marker):
-            os.remove(marker)
             return ''
-    return ('PUSH GATE: nothing leaves this machine without the owner. There is no push-ok for %s.\n'
-            'The owner allows ONE push by running, in their own terminal:\n  touch "%s/.claude/push-ok"\n'
-            'Then run the push again. Do not create that file yourself; a session that does is refused.' % (repo, repo))
+    if data and owner_said_push(data.get('transcript_path')):
+        return ''
+    return ('PUSH GATE: the owner has not said yes to a push from %s.\n'
+            'Ask the owner in chat; their own message saying to push allows it until their next message. Or the owner '
+            'allows pushes from that repo, once, by running in their own terminal:\n  touch "%s/.claude/push-ok"\n'
+            'and deleting that file stops them again. Do not create it yourself; a session that does is refused.' % (repo, repo))
 
 def contract_ok(path):
     p = os.path.abspath(path); home = os.path.expanduser('~')
@@ -225,15 +278,45 @@ def note_ui_touch(state, root, fp):
     if rel in c.get('files', []):
         state.setdefault('ui_touched', {})[rel] = time.time()
 
+SEGMENT = re.compile(r'\|\||&&|;|\n|(?<!\|)\|(?!\|)')
+REDIRECT_TO = re.compile(r'(?<![<&\d])>{1,2}\s*("[^"]+"|\'[^\']+\'|[^\s;&|<>]+)')
+TEE_TO = re.compile(r'\btee\b((?:\s+-\w+)*)\s+("[^"]+"|\'[^\']+\'|[^\s;&|<>]+)')
+FILE_CMD = re.compile(r'^\s*(?:sudo\s+)?(sed\s+-i|rm|touch|truncate|mv|cp|install|ln|git\s+(?:\S+\s+)*(?:checkout|restore|reset|rm|mv))\b')
+SCRIPT_WRITE = re.compile(r'open\([^)]*[\'"][wax]|write_?[Tt]ext\(|writeFile(Sync)?\(|\.write\(|os\.(replace|rename|remove)|shutil\.')
+
+def bash_ui_writes(cmd, files):
+    """The UI-gated files a Bash command WRITES, as far as a pattern can tell: the target of a redirect or tee, a
+    file named by sed -i, rm, touch, mv, git checkout and the like, the destination of cp, or a file named inside
+    an inline script that writes. Naming a file is not writing it: starting a server that logs elsewhere, reading,
+    or listing never counts. Files are matched by their project path (search/index.html), never by bare name,
+    so another folder's index.html is not this one."""
+    def names(tok):
+        tok = tok.strip('"\'')
+        return [rel for rel in files if tok == rel or tok.endswith('/' + rel)]
+    hit = set()
+    if SCRIPT_WRITE.search(cmd):
+        hit.update(rel for rel in files if rel in cmd)
+    for seg in SEGMENT.split(cmd):
+        for m in REDIRECT_TO.finditer(seg):
+            hit.update(names(m.group(1)))
+        for m in TEE_TO.finditer(seg):
+            hit.update(names(m.group(2)))
+        f = FILE_CMD.match(seg)
+        if f:
+            args = seg.split()
+            if f.group(1) in ('cp', 'install', 'ln'):
+                args = args[-1:]
+            for a in args:
+                hit.update(names(a))
+    return hit
+
 def note_ui_touch_bash(state, root, cmd):
-    """A Bash command that can write and names a UI-gated file counts as touching it. The pattern list cannot
-    know whether the write happened, so it errs toward running the check."""
+    """A Bash command that writes a UI-gated file counts as touching it (see bash_ui_writes)."""
     c = ui_config(root)
     if not c:
         return
-    for rel in c.get('files', []):
-        if rel in cmd or os.path.basename(rel) in cmd:
-            state.setdefault('ui_touched', {})[rel] = time.time()
+    for rel in bash_ui_writes(cmd, c.get('files', [])):
+        state.setdefault('ui_touched', {})[rel] = time.time()
 
 def ui_gate(root, state):
     """Hold the turn only for files this session itself edited (Edit, Write, MultiEdit, NotebookEdit, or a writing
@@ -263,14 +346,14 @@ def main():
 
     if ev == 'SessionStart':
         G.mandatory_for(state, root); G.save(sid, state)
-        parts = ['THE GATES ARE ON. ' + reading_status(state, root)]
+        on = [g for g in GATES if ON[g]]
+        head = 'GATES ON: %s.' % (', '.join(on) or 'none')
+        parts = [head + (' ' + reading_status(state, root) if ON['reading'] else '')]
         for name in ('RULES.md', 'START-HERE.md'):
             p = os.path.join(root, name)
             if os.path.exists(p):
                 parts.append('%s:\n%s' % (name, open(p, encoding='utf-8').read()))
-        parts.append('Also on: a write into a folder with no contract is refused; a project sweep runs after every write '
-                     'when the project has one; a changed UI blocks the end of the turn until its check passes. '
-                     'No time estimates, ever.')
+        parts.append('No time estimates, ever.')
         out({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': '\n\n'.join(parts)[:9000]}})
 
     if ev == 'PreToolUse':
@@ -282,26 +365,28 @@ def main():
             sys.exit(0)
         if tool in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
             fp = ti.get('file_path') or ti.get('notebook_path') or ''
-            if fp and protected_path(fp):
+            if ON['protect'] and fp and protected_path(fp):
                 refuse(PROTECT_MSG)
-            miss = G.missing(state, root); G.save(sid, state)
-            if miss:
-                refuse(reading_status(state, root))
-            ok, msg = contract_ok(fp)
-            if not ok:
-                refuse(msg)
+            if ON['reading']:
+                miss = G.missing(state, root); G.save(sid, state)
+                if miss:
+                    refuse(reading_status(state, root))
+            if ON['contract']:
+                ok, msg = contract_ok(fp)
+                if not ok:
+                    refuse(msg)
             sys.exit(0)
         if tool == 'Bash':
             cmd = ti.get('command') or ''
             if READONLY_OK.search(cmd):
                 sys.exit(0)
-            if PROTECT_WORDS.search(cmd) and (WRITEY.search(cmd) or 'install-gates.sh' in cmd):
+            if ON['protect'] and PROTECT_WORDS.search(cmd) and (WRITEY.search(cmd) or 'install-gates.sh' in cmd):
                 refuse(PROTECT_MSG)
-            if PUSH.search(cmd):
-                msg = push_gate(cmd, root)
+            if ON['push'] and PUSH.search(cmd):
+                msg = push_gate(cmd, root, data)
                 if msg:
                     refuse(msg)
-            if WRITEY.search(cmd) and G.missing(state, root):
+            if ON['reading'] and WRITEY.search(cmd) and G.missing(state, root):
                 G.save(sid, state)
                 refuse('This command can write, and the reading receipt is incomplete.\n' + reading_status(state, root))
             if WRITEY.search(cmd):
@@ -331,7 +416,7 @@ def main():
         if tool in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
             fp = ti.get('file_path') or ti.get('notebook_path') or ''
             note_ui_touch(state, root, fp); G.save(sid, state)
-            if fp.endswith(SWEEP_EXT) and not any(s in fp for s in SWEEP_SKIP) and os.path.exists(fp):
+            if ON['sweep'] and fp.endswith(SWEEP_EXT) and not any(s in fp for s in SWEEP_SKIP) and os.path.exists(fp):
                 rep = sweep_report(root, fp)
                 if rep and not rep.endswith('0 hits'):
                     out({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': 'RULES SWEEP on ' + G.rel(fp, root) + ':\n' + rep}})
@@ -341,7 +426,9 @@ def main():
     if ev == 'Stop':
         if data.get('stop_hook_active'):
             sys.exit(0)
-        msgs = [m for m in (ui_gate(root, state), story_gate(data), verify_gate(data)) if m]
+        msgs = [m for m in ((ON['ui'] and ui_gate(root, state)),
+                            (ON['story'] and story_gate(data)),
+                            (ON['verify'] and verify_gate(data))) if m]
         if msgs:
             refuse('\n\n'.join(msgs))
         sys.exit(0)

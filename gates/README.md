@@ -8,14 +8,22 @@ the rule can still skip it under momentum. A hook cannot be skipped.
 |---|---|---|
 | Reading receipt | Read (before and after) | Records every window of every file the session reads, corrected to what the tool returned when it truncated. |
 | Reading gate | Edit, Write, MultiEdit, NotebookEdit, Bash | Refuses any edit, write or writing command until every line of the project's mandatory set has been read this session. Read-only commands pass. |
-| Push gate | Bash | `git push` (and `gh` commands that publish) is refused unless the owner has created `.claude/push-ok` in that repo, or `~/.claude/push-ok` for any repo, in their own terminal. The file is consumed: one touch, one push. A session that creates the file itself is refused. |
+| Push gate | Bash | `git push` (and `gh` commands that publish) goes ahead only on the owner's yes. The yes is either the owner's own latest message in the chat (it says to push and does not say "don't" or "wait"; it lasts until the owner's next message), or a `.claude/push-ok` file the owner created in that repo (or `~/.claude/push-ok` for every repo) in their own terminal, which stands until the owner deletes it. Tool output, hook feedback, system notices, files and web pages never count as the owner. A session that creates the file itself is refused. |
 | Self-protection | Edit, Write, Bash | Every session is refused from writing under `~/.claude/gates`, `~/.claude/reading-receipts`, `~/.claude/settings.json` or any `push-ok`, and from running the installer. Gate code changes happen in the repo copy; only the owner installs, in their own terminal. |
 | Contract gate | Edit, Write | Refuses a write into a folder with no `VALIDATION.md` and no `.contract` marker in it or any folder above it. The refusal names the install command. |
 | Rules sweep | Edit, Write (after) | If the project has `gates/sweep.py` or `.claude/sweep.py`, runs it over any Markdown, text or HTML file written and reports the hits into the session. |
-| UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file was edited by this session (through Edit, Write, MultiEdit, NotebookEdit, or a writing Bash command that named the file) and the check's marker is older than that edit. A file changed by another session in the same folder is that session's to check; it never holds this one. |
+| UI gate | Stop | If the project has `.claude/uigate.json`, refuses to end the turn while a listed file was edited by this session (through Edit, Write, MultiEdit, NotebookEdit, or a Bash command that writes the file: a redirect or tee into it, sed -i, rm, mv or git checkout on it, a cp onto it, or an inline script that writes it; naming, reading or starting a file never counts, and files are matched by their project path, not their bare name) and the check's marker is older than that edit. A file changed by another session in the same folder is that session's to check; it never holds this one. |
 | Verification gate | Stop | Refuses a message that says it checked, verified, tested or confirmed something in a turn where no tool ran at all: no file opened, no command run, no probe made. The transcript records every tool call, so the count is not the model's word. |
 | Story gate | Stop | Reads the message the session is about to end on and refuses the turn while it hedges (probably, seems to, may be, I assume, I believe, must have been) or explains a discrepancy with a story (a stale snapshot, a cache, an old version, that would explain), or states a flat diagnosis (X isn't on, that's why; the cause is; the design isn't your problem) with no source beside it: no file and line, no command and output, no question, no admission that it is unchecked. The refusal names each sentence and asks for the check or the question. |
-| Session start | SessionStart | Prints the receipt's state and the project's `RULES.md` and `START-HERE.md`, if they exist. |
+| Session start | SessionStart | Prints which gates are on, the receipt's state when the reading gate is on, and the project's `RULES.md` and `START-HERE.md`, if they exist. |
+
+## Turning gates on and off
+
+`switches.json` beside `gate.py` holds one switch per gate: `reading`, `contract`, `story`, `verify`, `ui`,
+`push`, `sweep`, `protect`. `true` is on, `false` is off, and a missing file or key leaves that gate running. The copy in this
+repo is the one to edit; run the installer again in your own terminal to apply it. The shipped settings keep
+the UI gate, the push gate, the rules sweep and self-protection, and turn off the reading, contract, story and
+verification gates.
 
 ## Install, on any machine
 
@@ -28,12 +36,15 @@ That copies the engine to `~/.claude/gates/`, keeps the contract template beside
 entries to `~/.claude/settings.json` (backed up first). Run it yourself, in your own terminal: once the gates are
 installed, no session can run the installer or change the installed engine, which is the point.
 
-To allow one push from a session, in your own terminal:
+To let a session push, say so in the chat ("push it"), and that yes lasts until your next message. To allow
+pushes from a repo without asking each time, once, in your own terminal (delete the file to stop them again):
 
 ```bash
 touch ~/Repos/<repo>/.claude/push-ok
-``` Open a new session in any project and try to edit
-a file before reading anything: it must be refused with the list of what is unread.
+```
+
+To check the reading gate when it is on, open a new session in any project and try to edit a file before
+reading anything: it must be refused with the list of what is unread.
 
 ## What a project has to read
 
