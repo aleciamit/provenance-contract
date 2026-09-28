@@ -11,9 +11,6 @@ checker that blocks a build on a violation, and the acceptance checklist one age
 the next. Copy it into a project, fill in the numbers, and the agent works under it from the
 first session.
 
-The write-up of where these rules came from, with the incidents that produced each one, is at
-[aleciamitchell.com/method](https://aleciamitchell.com/method) (password protected; ask).
-
 ## The five rules
 
 1. **Every value has to cite its source.** Nothing generated ships unless it traces back to a
